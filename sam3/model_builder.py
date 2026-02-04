@@ -2,8 +2,9 @@
 
 # pyre-unsafe
 
+import fnmatch
 import os
-from typing import Optional
+from typing import Any, Dict, Optional, Sequence
 
 import pkg_resources
 import torch
@@ -115,7 +116,9 @@ def _create_vl_backbone(vit_neck, text_encoder):
     return SAM3VLBackbone(visual=vit_neck, text=text_encoder, scalp=1)
 
 
-def _create_transformer_encoder() -> TransformerEncoderFusion:
+def _create_transformer_encoder(
+    adapter_cfg: Optional[Dict[str, Any]] = None,
+) -> TransformerEncoderFusion:
     """Create transformer encoder with its layer."""
     encoder_layer = TransformerEncoderLayer(
         activation="relu",
@@ -138,6 +141,7 @@ def _create_transformer_encoder() -> TransformerEncoderFusion:
             embed_dim=256,
             batch_first=True,
         ),
+        adapter_cfg=adapter_cfg,
     )
 
     encoder = TransformerEncoderFusion(
@@ -153,7 +157,9 @@ def _create_transformer_encoder() -> TransformerEncoderFusion:
     return encoder
 
 
-def _create_transformer_decoder() -> TransformerDecoder:
+def _create_transformer_decoder(
+    adapter_cfg: Optional[Dict[str, Any]] = None,
+) -> TransformerDecoder:
     """Create transformer decoder with its layer."""
     decoder_layer = TransformerDecoderLayer(
         activation="relu",
@@ -167,6 +173,7 @@ def _create_transformer_decoder() -> TransformerDecoder:
         ),
         n_heads=8,
         use_text_cross_attention=True,
+        adapter_cfg=adapter_cfg,
     )
 
     decoder = TransformerDecoder(
@@ -366,7 +373,7 @@ def _create_tracker_maskmem_backbone():
     return maskmem_backbone
 
 
-def _create_tracker_transformer():
+def _create_tracker_transformer(adapter_cfg: Optional[Dict[str, Any]] = None):
     """Create the SAM3 Tracker transformer components."""
     # Self attention
     self_attention = RoPEAttention(
@@ -407,6 +414,7 @@ def _create_tracker_transformer():
         pos_enc_at_cross_attn_keys=True,
         pos_enc_at_cross_attn_queries=False,
         cross_attention=cross_attention,
+        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "tracker"),
     )
 
     # Encoder
@@ -432,7 +440,10 @@ def _create_tracker_transformer():
 
 
 def build_tracker(
-    apply_temporal_disambiguation: bool, with_backbone: bool = False, compile_mode=None
+    apply_temporal_disambiguation: bool,
+    with_backbone: bool = False,
+    compile_mode=None,
+    adapter_cfg: Optional[Dict[str, Any]] = None,
 ) -> Sam3TrackerPredictor:
     """
     Build the SAM3 Tracker module for video tracking.
@@ -443,7 +454,7 @@ def build_tracker(
 
     # Create model components
     maskmem_backbone = _create_tracker_maskmem_backbone()
-    transformer = _create_tracker_transformer()
+    transformer = _create_tracker_transformer(adapter_cfg=adapter_cfg)
     backbone = None
     if with_backbone:
         vision_backbone = _create_vision_backbone(compile_mode=compile_mode)
@@ -515,12 +526,66 @@ def _create_vision_backbone(
     return vit_neck
 
 
-def _create_sam3_transformer(has_presence_token: bool = True) -> TransformerWrapper:
+def _filter_adapter_cfg(
+    adapter_cfg: Optional[Dict[str, Any]], target: str
+) -> Optional[Dict[str, Any]]:
+    if not adapter_cfg or not adapter_cfg.get("enabled", False):
+        return None
+    targets = adapter_cfg.get("targets")
+    if targets is None:
+        return adapter_cfg
+    if isinstance(targets, str):
+        targets = [targets]
+    if target in targets:
+        return adapter_cfg
+    return None
+
+
+def _create_sam3_transformer(
+    has_presence_token: bool = True,
+    adapter_cfg: Optional[Dict[str, Any]] = None,
+) -> TransformerWrapper:
     """Create SAM3 transformer encoder and decoder."""
-    encoder: TransformerEncoderFusion = _create_transformer_encoder()
-    decoder: TransformerDecoder = _create_transformer_decoder()
+    encoder: TransformerEncoderFusion = _create_transformer_encoder(
+        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "encoder")
+    )
+    decoder: TransformerDecoder = _create_transformer_decoder(
+        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "decoder")
+    )
 
     return TransformerWrapper(encoder=encoder, decoder=decoder, d_model=256)
+
+
+def _set_trainable_adapter_only(
+    model: nn.Module,
+    trainable_patterns: Sequence[str],
+) -> None:
+    for name, param in model.named_parameters():
+        param.requires_grad_(False)
+        if any(fnmatch.fnmatch(name, pattern) for pattern in trainable_patterns):
+            param.requires_grad_(True)
+
+
+def _load_adapter_checkpoint(
+    model: nn.Module,
+    checkpoint_path: str,
+    adapter_patterns: Sequence[str],
+) -> None:
+    with g_pathmgr.open(checkpoint_path, "rb") as f:
+        ckpt = torch.load(f, map_location="cpu", weights_only=True)
+    if "model" in ckpt and isinstance(ckpt["model"], dict):
+        ckpt = ckpt["model"]
+    adapter_state = {
+        k: v
+        for k, v in ckpt.items()
+        if any(fnmatch.fnmatch(k, pattern) for pattern in adapter_patterns)
+    }
+    missing_keys, _ = model.load_state_dict(adapter_state, strict=False)
+    if len(missing_keys) > 0:
+        print(
+            f"loaded {checkpoint_path} and found "
+            f"missing and/or unexpected keys:\n{missing_keys=}"
+        )
 
 
 def _load_checkpoint(model, checkpoint_path):
@@ -566,6 +631,7 @@ def build_sam3_image_model(
     enable_segmentation=True,
     enable_inst_interactivity=False,
     compile=False,
+    adapter: Optional[Dict[str, Any]] = None,
 ):
     """
     Build SAM3 image model
@@ -587,6 +653,8 @@ def build_sam3_image_model(
             "sam3", "assets/bpe_simple_vocab_16e6.txt.gz"
         )
 
+    adapter_cfg = adapter or {}
+
     # Create visual components
     compile_mode = "default" if compile else None
     vision_encoder = _create_vision_backbone(
@@ -600,7 +668,7 @@ def build_sam3_image_model(
     backbone = _create_vl_backbone(vision_encoder, text_encoder)
 
     # Create transformer components
-    transformer = _create_sam3_transformer()
+    transformer = _create_sam3_transformer(adapter_cfg=adapter_cfg)
 
     # Create dot product scoring
     dot_prod_scoring = _create_dot_product_scoring()
@@ -615,7 +683,10 @@ def build_sam3_image_model(
     # Create geometry encoder
     input_geometry_encoder = _create_geometry_encoder()
     if enable_inst_interactivity:
-        sam3_pvs_base = build_tracker(apply_temporal_disambiguation=False)
+        sam3_pvs_base = build_tracker(
+            apply_temporal_disambiguation=False,
+            adapter_cfg=adapter_cfg,
+        )
         inst_predictor = SAM3InteractiveImagePredictor(sam3_pvs_base)
     else:
         inst_predictor = None
@@ -634,6 +705,18 @@ def build_sam3_image_model(
     # Load checkpoint if provided
     if checkpoint_path is not None:
         _load_checkpoint(model, checkpoint_path)
+    adapter_checkpoint_path = adapter_cfg.get("checkpoint_path")
+    if adapter_checkpoint_path:
+        _load_adapter_checkpoint(
+            model,
+            adapter_checkpoint_path,
+            adapter_cfg.get("param_patterns", ["*adapter*"]),
+        )
+    if adapter_cfg.get("enabled", False) and adapter_cfg.get("train_adapter_only", False):
+        _set_trainable_adapter_only(
+            model,
+            adapter_cfg.get("trainable_param_patterns", ["*adapter*"]),
+        )
 
     # Setup device and mode
     model = _setup_device_and_mode(model, device, eval_mode)
@@ -660,6 +743,7 @@ def build_sam3_video_model(
     apply_temporal_disambiguation: bool = True,
     device="cuda" if torch.cuda.is_available() else "cpu",
     compile=False,
+    adapter: Optional[Dict[str, Any]] = None,
 ) -> Sam3VideoInferenceWithInstanceInteractivity:
     """
     Build SAM3 dense tracking model.
@@ -676,14 +760,22 @@ def build_sam3_video_model(
             "sam3", "assets/bpe_simple_vocab_16e6.txt.gz"
         )
 
+    adapter_cfg = adapter or {}
+
     # Build Tracker module
-    tracker = build_tracker(apply_temporal_disambiguation=apply_temporal_disambiguation)
+    tracker = build_tracker(
+        apply_temporal_disambiguation=apply_temporal_disambiguation,
+        adapter_cfg=adapter_cfg,
+    )
 
     # Build Detector components
     visual_neck = _create_vision_backbone()
     text_encoder = _create_text_encoder(bpe_path)
     backbone = SAM3VLBackbone(scalp=1, visual=visual_neck, text=text_encoder)
-    transformer = _create_sam3_transformer(has_presence_token=has_presence_token)
+    transformer = _create_sam3_transformer(
+        has_presence_token=has_presence_token,
+        adapter_cfg=adapter_cfg,
+    )
     segmentation_head: UniversalSegmentationHead = _create_segmentation_head()
     input_geometry_encoder = _create_geometry_encoder()
 
@@ -786,6 +878,18 @@ def build_sam3_video_model(
             print(f"Missing keys: {missing_keys}")
         if unexpected_keys:
             print(f"Unexpected keys: {unexpected_keys}")
+    adapter_checkpoint_path = adapter_cfg.get("checkpoint_path")
+    if adapter_checkpoint_path:
+        _load_adapter_checkpoint(
+            model,
+            adapter_checkpoint_path,
+            adapter_cfg.get("param_patterns", ["*adapter*"]),
+        )
+    if adapter_cfg.get("enabled", False) and adapter_cfg.get("train_adapter_only", False):
+        _set_trainable_adapter_only(
+            model,
+            adapter_cfg.get("trainable_param_patterns", ["*adapter*"]),
+        )
 
     model.to(device=device)
     return model

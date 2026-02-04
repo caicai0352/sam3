@@ -105,6 +105,51 @@ Training configurations are stored in `sam3/train/configs/`. The configuration f
 - **Launcher Configuration**: Distributed training and cluster settings
 - **Logging Configuration**: TensorBoard, experiment tracking, and output directories
 
+### Adapter Fine-tuning
+
+SAM3 supports lightweight adapter layers for parameter-efficient fine-tuning. Adapters can be inserted into the transformer encoder/decoder (and tracker, for video models). Enable them by adding an `adapter` block under the `model` config:
+
+```yaml
+model:
+  _target_: sam3.model_builder.build_sam3_image_model
+  adapter:
+    enabled: true
+    bottleneck_dim: 64
+    dropout: 0.1
+    activation: relu
+    init_scale: 1.0
+    positions: [post_self_attn, post_cross_attn, post_ffn]
+    targets: [encoder, decoder]
+    train_adapter_only: true
+    param_patterns: ["*adapter*"]
+```
+
+**Checkpointing adapters only**
+
+```yaml
+trainer:
+  checkpoint:
+    save_adapter_only: true
+    adapter_parameter_patterns: ["*adapter*"]
+```
+
+**Loading adapter weights for evaluation or continued training**
+
+```yaml
+model:
+  _target_: sam3.model_builder.build_sam3_image_model
+  checkpoint_path: /path/to/base_model.pt
+  adapter:
+    enabled: true
+    checkpoint_path: /path/to/adapter_checkpoint.pt
+    param_patterns: ["*adapter*"]
+```
+
+Notes:
+- `positions` controls where adapters are inserted. Use any subset of `post_self_attn`, `post_cross_attn`, and `post_ffn`.
+- `targets` controls which transformer stacks receive adapters (`encoder`, `decoder`, `tracker`).
+- Set `train_adapter_only: true` to freeze non-adapter parameters during fine-tuning.
+
 #### Key Configuration Sections
 
 ```yaml

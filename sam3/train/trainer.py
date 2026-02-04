@@ -27,6 +27,7 @@ from sam3.train.optim.optimizer import construct_optimizer
 from sam3.train.utils.checkpoint_utils import (
     assert_skipped_parameters_are_frozen,
     exclude_params_matching_unix_pattern,
+    filter_params_matching_unix_pattern,
     load_state_dict_into_model,
     with_check_parameter_frozen,
 )
@@ -113,6 +114,8 @@ class CheckpointConf:
     model_weight_initializer: Any = None
     save_best_meters: List[str] = None
     skip_saving_parameters: List[str] = field(default_factory=list)
+    save_adapter_only: bool = False
+    adapter_parameter_patterns: List[str] = field(default_factory=lambda: ["*adapter*"])
     initialize_after_preemption: Optional[bool] = None
     # if not None, training will be resumed from this checkpoint
     resume_from: Optional[str] = None
@@ -351,9 +354,19 @@ class Trainer:
             checkpoint_paths.append(os.path.join(checkpoint_folder, f"{ckpt_name}.pt"))
 
         state_dict = unwrap_ddp_if_wrapped(self.model).state_dict()
-        state_dict = exclude_params_matching_unix_pattern(
-            patterns=self.checkpoint_conf.skip_saving_parameters, state_dict=state_dict
-        )
+        if self.checkpoint_conf.save_adapter_only:
+            if not self.checkpoint_conf.adapter_parameter_patterns:
+                raise ValueError(
+                    "adapter_parameter_patterns must be provided when save_adapter_only is True."
+                )
+            state_dict = filter_params_matching_unix_pattern(
+                patterns=self.checkpoint_conf.adapter_parameter_patterns,
+                state_dict=state_dict,
+            )
+        else:
+            state_dict = exclude_params_matching_unix_pattern(
+                patterns=self.checkpoint_conf.skip_saving_parameters, state_dict=state_dict
+            )
 
         checkpoint = {
             "model": state_dict,
