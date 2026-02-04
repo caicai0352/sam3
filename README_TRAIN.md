@@ -107,7 +107,7 @@ Training configurations are stored in `sam3/train/configs/`. The configuration f
 
 ### Adapter Fine-tuning
 
-SAM3 supports lightweight adapter layers for parameter-efficient fine-tuning. Adapters can be inserted into the transformer encoder/decoder (and tracker, for video models). Enable them by adding an `adapter` block under the `model` config:
+SAM3 supports lightweight adapter layers for parameter-efficient fine-tuning. Adapters can be inserted into the vision backbone, text encoder, geometry encoder, DETR encoder/decoder, and mask decoder (as well as the tracker for video models). Enable them by adding an `adapter` block under the `model` config:
 
 ```yaml
 model:
@@ -119,7 +119,7 @@ model:
     activation: relu
     init_scale: 1.0
     positions: [post_self_attn, post_cross_attn, post_ffn]
-    targets: [encoder, decoder]
+    targets: [vision_encoder, text_encoder, geometry_encoder, detr_encoder, detr_decoder, mask_decoder]
     train_adapter_only: true
     param_patterns: ["*adapter*"]
 ```
@@ -147,8 +147,10 @@ model:
 
 Notes:
 - `positions` controls where adapters are inserted. Use any subset of `post_self_attn`, `post_cross_attn`, and `post_ffn`.
-- `targets` controls which transformer stacks receive adapters (`encoder`, `decoder`, `tracker`).
+- `targets` controls which stacks receive adapters (`vision_encoder`, `text_encoder`, `geometry_encoder`, `detr_encoder`, `detr_decoder`, `mask_decoder`, `tracker`).
 - Set `train_adapter_only: true` to freeze non-adapter parameters during fine-tuning.
+
+Example config (Roboflow fine-tuning with adapters): `sam3/train/configs/adapter/adapter_roboflow_ft.yaml`.
 
 #### Key Configuration Sections
 

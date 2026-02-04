@@ -2,7 +2,7 @@
 
 # pyre-unsafe
 
-from typing import Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -11,7 +11,7 @@ from typing_extensions import override
 
 from .act_ckpt_utils import activation_ckpt_wrapper
 from .box_ops import box_cxcywh_to_xyxy
-from .model_misc import get_clones
+from .model_misc import Adapter, get_clones
 
 
 def is_right_padded(mask):
@@ -507,6 +507,7 @@ class SequenceGeometryEncoder(nn.Module):
         mask_encoder: MaskEncoder = None,
         add_mask_label: bool = False,
         use_act_ckpt: bool = False,
+        adapter_cfg: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
 
@@ -585,6 +586,16 @@ class SequenceGeometryEncoder(nn.Module):
         self.add_mask_label = add_mask_label
         self.mask_encoder = mask_encoder
         self.use_act_ckpt = use_act_ckpt
+        self.adapter = None
+        adapter_cfg = adapter_cfg or {}
+        if adapter_cfg.get("enabled", False):
+            self.adapter = Adapter(
+                d_model=self.d_model,
+                bottleneck_dim=adapter_cfg.get("bottleneck_dim", 64),
+                dropout=adapter_cfg.get("dropout", 0.0),
+                activation=adapter_cfg.get("activation", "relu"),
+                init_scale=adapter_cfg.get("init_scale", 1.0),
+            )
 
     def _encode_points(self, points, points_mask, points_labels, img_feats):
         points_embed = None
@@ -830,6 +841,8 @@ class SequenceGeometryEncoder(nn.Module):
                     act_ckpt_enable=self.training and self.use_act_ckpt,
                 )
             final_embeds = self.encode_norm(final_embeds)
+        if self.adapter is not None:
+            final_embeds = self.adapter(final_embeds)
         # Finally, concat mask embeddings if any
         if masks is not None and self.mask_encoder is not None:
             final_embeds, final_mask = concat_padded_sequences(

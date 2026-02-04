@@ -3,14 +3,14 @@
 # pyre-unsafe
 
 import math
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 
-from .model_misc import MLP
+from .model_misc import Adapter, MLP
 
 
 class LinearPresenceHead(nn.Sequential):
@@ -235,6 +235,7 @@ class UniversalSegmentationHead(SegmentationHead):
         presence_head: bool = False,
         dot_product_scorer=None,
         cross_attend_prompt=None,
+        adapter_cfg: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
             hidden_dim=hidden_dim,
@@ -258,6 +259,17 @@ class UniversalSegmentationHead(SegmentationHead):
                 dot_product_scorer
                 if dot_product_scorer is not None
                 else LinearPresenceHead(self.d_model)
+            )
+
+        self.adapter = None
+        adapter_cfg = adapter_cfg or {}
+        if adapter_cfg.get("enabled", False):
+            self.adapter = Adapter(
+                d_model=self.d_model,
+                bottleneck_dim=adapter_cfg.get("bottleneck_dim", 64),
+                dropout=adapter_cfg.get("dropout", 0.0),
+                activation=adapter_cfg.get("activation", "relu"),
+                init_scale=adapter_cfg.get("init_scale", 1.0),
             )
 
         self.cross_attend_prompt = cross_attend_prompt
@@ -291,6 +303,8 @@ class UniversalSegmentationHead(SegmentationHead):
                 key_padding_mask=prompt_mask,
             )[0]
             encoder_hidden_states = tgt2 + encoder_hidden_states
+        if self.adapter is not None:
+            encoder_hidden_states = self.adapter(encoder_hidden_states)
 
         presence_logit = None
         if self.presence_head is not None:

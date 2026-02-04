@@ -1,0 +1,23 @@
+# @package _global_
+defaults:
+  - ../roboflow_v100/roboflow_v100_full_ft_100_images
+  - _self_
+
+# Adapter fine-tuning override config for Roboflow training.
+
+trainer:
+  model:
+    adapter:
+      enabled: true
+      bottleneck_dim: 64
+      dropout: 0.1
+      activation: relu
+      init_scale: 1.0
+      positions: [post_self_attn, post_cross_attn, post_ffn]
+      targets: [vision_encoder, text_encoder, geometry_encoder, detr_encoder, detr_decoder, mask_decoder]
+      train_adapter_only: true
+      param_patterns: ["*adapter*"]
+
+  checkpoint:
+    save_adapter_only: true
+    adapter_parameter_patterns: ["*adapter*"]

@@ -70,7 +70,9 @@ def _create_position_encoding(precompute_resolution=None):
     )
 
 
-def _create_vit_backbone(compile_mode=None):
+def _create_vit_backbone(
+    compile_mode=None, adapter_cfg: Optional[Dict[str, Any]] = None
+):
     """Create ViT backbone for visual feature extraction."""
     return ViT(
         img_size=1008,
@@ -97,6 +99,7 @@ def _create_vit_backbone(compile_mode=None):
         return_interm_layers=False,
         bias_patch_embed=False,
         compile_mode=compile_mode,
+        adapter_cfg=adapter_cfg,
     )
 
 
@@ -211,7 +214,9 @@ def _create_dot_product_scoring():
     return DotProductScoring(d_model=256, d_proj=256, prompt_mlp=prompt_mlp)
 
 
-def _create_segmentation_head(compile_mode=None):
+def _create_segmentation_head(
+    compile_mode=None, adapter_cfg: Optional[Dict[str, Any]] = None
+):
     """Create segmentation head with pixel decoder."""
     pixel_decoder = PixelDecoder(
         num_upsampling_stages=3,
@@ -235,11 +240,12 @@ def _create_segmentation_head(compile_mode=None):
         act_ckpt=True,
         cross_attend_prompt=cross_attend_prompt,
         pixel_decoder=pixel_decoder,
+        adapter_cfg=adapter_cfg,
     )
     return segmentation_head
 
 
-def _create_geometry_encoder():
+def _create_geometry_encoder(adapter_cfg: Optional[Dict[str, Any]] = None):
     """Create geometry encoder with all its components."""
     # Create position encoding for geometry encoder
     geo_pos_enc = _create_position_encoding()
@@ -291,6 +297,7 @@ def _create_geometry_encoder():
         use_act_ckpt=True,
         add_cls=True,
         add_post_encode_proj=True,
+        adapter_cfg=adapter_cfg,
     )
     return input_geometry_encoder
 
@@ -497,7 +504,9 @@ def build_tracker(
     return model
 
 
-def _create_text_encoder(bpe_path: str) -> VETextEncoder:
+def _create_text_encoder(
+    bpe_path: str, adapter_cfg: Optional[Dict[str, Any]] = None
+) -> VETextEncoder:
     """Create SAM3 text encoder."""
     tokenizer = SimpleTokenizer(bpe_path=bpe_path)
     return VETextEncoder(
@@ -506,17 +515,22 @@ def _create_text_encoder(bpe_path: str) -> VETextEncoder:
         width=1024,
         heads=16,
         layers=24,
+        adapter_cfg=adapter_cfg,
     )
 
 
 def _create_vision_backbone(
-    compile_mode=None, enable_inst_interactivity=True
+    compile_mode=None,
+    enable_inst_interactivity=True,
+    adapter_cfg: Optional[Dict[str, Any]] = None,
 ) -> Sam3DualViTDetNeck:
     """Create SAM3 visual backbone with ViT and neck."""
     # Position encoding
     position_encoding = _create_position_encoding(precompute_resolution=1008)
     # ViT backbone
-    vit_backbone: ViT = _create_vit_backbone(compile_mode=compile_mode)
+    vit_backbone: ViT = _create_vit_backbone(
+        compile_mode=compile_mode, adapter_cfg=adapter_cfg
+    )
     vit_neck: Sam3DualViTDetNeck = _create_vit_neck(
         position_encoding,
         vit_backbone,
@@ -536,7 +550,14 @@ def _filter_adapter_cfg(
         return adapter_cfg
     if isinstance(targets, str):
         targets = [targets]
-    if target in targets:
+    aliases = {
+        "detr_encoder": ["encoder"],
+        "detr_decoder": ["decoder"],
+    }
+    normalized = set(targets)
+    for alias in aliases.get(target, []):
+        normalized.add(alias)
+    if target in normalized:
         return adapter_cfg
     return None
 
@@ -547,10 +568,10 @@ def _create_sam3_transformer(
 ) -> TransformerWrapper:
     """Create SAM3 transformer encoder and decoder."""
     encoder: TransformerEncoderFusion = _create_transformer_encoder(
-        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "encoder")
+        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "detr_encoder")
     )
     decoder: TransformerDecoder = _create_transformer_decoder(
-        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "decoder")
+        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "detr_decoder")
     )
 
     return TransformerWrapper(encoder=encoder, decoder=decoder, d_model=256)
@@ -658,11 +679,15 @@ def build_sam3_image_model(
     # Create visual components
     compile_mode = "default" if compile else None
     vision_encoder = _create_vision_backbone(
-        compile_mode=compile_mode, enable_inst_interactivity=enable_inst_interactivity
+        compile_mode=compile_mode,
+        enable_inst_interactivity=enable_inst_interactivity,
+        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "vision_encoder"),
     )
 
     # Create text components
-    text_encoder = _create_text_encoder(bpe_path)
+    text_encoder = _create_text_encoder(
+        bpe_path, adapter_cfg=_filter_adapter_cfg(adapter_cfg, "text_encoder")
+    )
 
     # Create visual-language backbone
     backbone = _create_vl_backbone(vision_encoder, text_encoder)
@@ -675,13 +700,18 @@ def build_sam3_image_model(
 
     # Create segmentation head if enabled
     segmentation_head = (
-        _create_segmentation_head(compile_mode=compile_mode)
+        _create_segmentation_head(
+            compile_mode=compile_mode,
+            adapter_cfg=_filter_adapter_cfg(adapter_cfg, "mask_decoder"),
+        )
         if enable_segmentation
         else None
     )
 
     # Create geometry encoder
-    input_geometry_encoder = _create_geometry_encoder()
+    input_geometry_encoder = _create_geometry_encoder(
+        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "geometry_encoder")
+    )
     if enable_inst_interactivity:
         sam3_pvs_base = build_tracker(
             apply_temporal_disambiguation=False,
@@ -769,15 +799,23 @@ def build_sam3_video_model(
     )
 
     # Build Detector components
-    visual_neck = _create_vision_backbone()
-    text_encoder = _create_text_encoder(bpe_path)
+    visual_neck = _create_vision_backbone(
+        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "vision_encoder")
+    )
+    text_encoder = _create_text_encoder(
+        bpe_path, adapter_cfg=_filter_adapter_cfg(adapter_cfg, "text_encoder")
+    )
     backbone = SAM3VLBackbone(scalp=1, visual=visual_neck, text=text_encoder)
     transformer = _create_sam3_transformer(
         has_presence_token=has_presence_token,
         adapter_cfg=adapter_cfg,
     )
-    segmentation_head: UniversalSegmentationHead = _create_segmentation_head()
-    input_geometry_encoder = _create_geometry_encoder()
+    segmentation_head: UniversalSegmentationHead = _create_segmentation_head(
+        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "mask_decoder")
+    )
+    input_geometry_encoder = _create_geometry_encoder(
+        adapter_cfg=_filter_adapter_cfg(adapter_cfg, "geometry_encoder")
+    )
 
     # Create main dot product scoring
     main_dot_prod_mlp = MLP(
