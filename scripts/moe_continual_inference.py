@@ -153,13 +153,26 @@ def load_image(path: str) -> Image.Image:
     return Image.open(path).convert("RGB")
 
 
-def load_model(checkpoint_path: str, device: str) -> torch.nn.Module:
-    if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+def load_model(
+    backbone_checkpoint_path: str,
+    expert_checkpoint_path: str | None,
+    device: str,
+    load_language_backbone: bool = True,
+) -> torch.nn.Module:
+    if not os.path.exists(backbone_checkpoint_path):
+        raise FileNotFoundError(
+            f"Backbone checkpoint not found: {backbone_checkpoint_path}"
+        )
+    if expert_checkpoint_path and not os.path.exists(expert_checkpoint_path):
+        raise FileNotFoundError(
+            f"Expert checkpoint not found: {expert_checkpoint_path}"
+        )
     return build_sam3_image_model(
         device=device,
         eval_mode=True,
-        checkpoint_path=checkpoint_path,
+        backbone_checkpoint_path=backbone_checkpoint_path,
+        expert_checkpoint_path=expert_checkpoint_path,
+        load_language_backbone=load_language_backbone,
         load_from_HF=False,
     )
 
@@ -282,11 +295,19 @@ def main() -> None:
     router = ExpertRouter(mapping=routing_map, fallback="sam3")
     validate_prompt_category_pairs(args.prompt, args.category)
 
-    shared_model = load_model(args.shared_backbone_ckpt, args.device)
+    shared_model = load_model(
+        backbone_checkpoint_path=args.shared_backbone_ckpt,
+        expert_checkpoint_path=None,
+        device=args.device,
+    )
 
     expert_models: Dict[str, torch.nn.Module] = {}
     for expert_key, spec in expert_specs.items():
-        expert_models[expert_key] = load_model(spec.checkpoint_path, args.device)
+        expert_models[expert_key] = load_model(
+            backbone_checkpoint_path=args.shared_backbone_ckpt,
+            expert_checkpoint_path=spec.checkpoint_path,
+            device=args.device,
+        )
 
     results: List[Dict] = []
     overhead_summary: Dict[str, Dict] = {}

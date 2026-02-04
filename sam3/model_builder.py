@@ -523,27 +523,85 @@ def _create_sam3_transformer(has_presence_token: bool = True) -> TransformerWrap
     return TransformerWrapper(encoder=encoder, decoder=decoder, d_model=256)
 
 
-def _load_checkpoint(model, checkpoint_path):
-    """Load model checkpoint from file."""
+def _load_checkpoint_state(checkpoint_path):
+    """Load raw checkpoint dict from file."""
     with g_pathmgr.open(checkpoint_path, "rb") as f:
         ckpt = torch.load(f, map_location="cpu", weights_only=True)
     if "model" in ckpt and isinstance(ckpt["model"], dict):
         ckpt = ckpt["model"]
-    sam3_image_ckpt = {
-        k.replace("detector.", ""): v for k, v in ckpt.items() if "detector" in k
+    return ckpt
+
+
+def _extract_detector_state(ckpt):
+    return {k.replace("detector.", ""): v for k, v in ckpt.items() if "detector" in k}
+
+
+def _extract_tracker_state(ckpt):
+    return {
+        k.replace("tracker.", "inst_interactive_predictor.model."): v
+        for k, v in ckpt.items()
+        if "tracker" in k
     }
+
+
+def _load_checkpoint(model, checkpoint_path):
+    """Load model checkpoint from file."""
+    ckpt = _load_checkpoint_state(checkpoint_path)
+    sam3_image_ckpt = _extract_detector_state(ckpt)
     if model.inst_interactive_predictor is not None:
-        sam3_image_ckpt.update(
-            {
-                k.replace("tracker.", "inst_interactive_predictor.model."): v
-                for k, v in ckpt.items()
-                if "tracker" in k
-            }
-        )
+        sam3_image_ckpt.update(_extract_tracker_state(ckpt))
     missing_keys, _ = model.load_state_dict(sam3_image_ckpt, strict=False)
     if len(missing_keys) > 0:
         print(
             f"loaded {checkpoint_path} and found "
+            f"missing and/or unexpected keys:\n{missing_keys=}"
+        )
+
+
+def load_sam3_vision_backbone_checkpoint(model, checkpoint_path):
+    """Load only the shared vision backbone weights from a checkpoint."""
+    ckpt = _load_checkpoint_state(checkpoint_path)
+    detector_state = _extract_detector_state(ckpt)
+    vision_prefix = "backbone.vision_backbone."
+    vision_state = {
+        k[len(vision_prefix) :]: v
+        for k, v in detector_state.items()
+        if k.startswith(vision_prefix)
+    }
+    missing_keys, _ = model.backbone.vision_backbone.load_state_dict(
+        vision_state, strict=False
+    )
+    if len(missing_keys) > 0:
+        print(
+            f"loaded {checkpoint_path} (vision backbone) and found "
+            f"missing and/or unexpected keys:\n{missing_keys=}"
+        )
+
+
+def load_sam3_expert_checkpoint(
+    model, checkpoint_path, load_language_backbone: bool = True
+):
+    """Load expert weights excluding the shared vision backbone."""
+    ckpt = _load_checkpoint_state(checkpoint_path)
+    detector_state = _extract_detector_state(ckpt)
+    tracker_state = (
+        _extract_tracker_state(ckpt)
+        if model.inst_interactive_predictor is not None
+        else {}
+    )
+    vision_prefix = "backbone.vision_backbone."
+    language_prefix = "backbone.language_backbone."
+    filtered_detector_state = {
+        k: v
+        for k, v in detector_state.items()
+        if not k.startswith(vision_prefix)
+        and (load_language_backbone or not k.startswith(language_prefix))
+    }
+    filtered_detector_state.update(tracker_state)
+    missing_keys, _ = model.load_state_dict(filtered_detector_state, strict=False)
+    if len(missing_keys) > 0:
+        print(
+            f"loaded {checkpoint_path} (expert) and found "
             f"missing and/or unexpected keys:\n{missing_keys=}"
         )
 
@@ -562,6 +620,9 @@ def build_sam3_image_model(
     device="cuda" if torch.cuda.is_available() else "cpu",
     eval_mode=True,
     checkpoint_path=None,
+    backbone_checkpoint_path: Optional[str] = None,
+    expert_checkpoint_path: Optional[str] = None,
+    load_language_backbone: bool = True,
     load_from_HF=True,
     enable_segmentation=True,
     enable_inst_interactivity=False,
@@ -575,6 +636,9 @@ def build_sam3_image_model(
         device: Device to load the model on ('cuda' or 'cpu')
         eval_mode: Whether to set the model to evaluation mode
         checkpoint_path: Optional path to model checkpoint
+        backbone_checkpoint_path: Optional path to shared vision backbone checkpoint
+        expert_checkpoint_path: Optional path to expert checkpoint (non-vision modules)
+        load_language_backbone: Whether to load the language backbone from expert ckpt
         enable_segmentation: Whether to enable segmentation head
         enable_inst_interactivity: Whether to enable instance interactivity (SAM 1 task)
         compile_mode: To enable compilation, set to "default"
@@ -632,7 +696,14 @@ def build_sam3_image_model(
     if load_from_HF and checkpoint_path is None:
         checkpoint_path = download_ckpt_from_hf()
     # Load checkpoint if provided
-    if checkpoint_path is not None:
+    if backbone_checkpoint_path or expert_checkpoint_path:
+        if backbone_checkpoint_path:
+            load_sam3_vision_backbone_checkpoint(model, backbone_checkpoint_path)
+        if expert_checkpoint_path:
+            load_sam3_expert_checkpoint(
+                model, expert_checkpoint_path, load_language_backbone
+            )
+    elif checkpoint_path is not None:
         _load_checkpoint(model, checkpoint_path)
 
     # Setup device and mode
