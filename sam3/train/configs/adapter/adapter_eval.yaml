@@ -1,0 +1,16 @@
+# @package _global_
+defaults:
+  - ../eval_base
+  - _self_
+
+# Adapter evaluation config. Update paths.* for your dataset/checkpoints.
+paths:
+  checkpoint_path: /path/to/base_model.pt
+
+trainer:
+  model:
+    adapter:
+      enabled: true
+      checkpoint_path: /path/to/adapter_checkpoint.pt
+      param_patterns: ["*adapter*"]
+      targets: [vision_encoder, text_encoder, geometry_encoder, detr_encoder, detr_decoder, mask_decoder]

@@ -152,6 +152,16 @@ Notes:
 
 Example config (Roboflow fine-tuning with adapters): `sam3/train/configs/adapter/adapter_roboflow_ft.yaml`.
 
+**Adapter evaluation / inference**
+
+Use the evaluation configs to load a trained base model plus adapter weights and run metrics:
+
+```bash
+python sam3/train/train.py -c configs/adapter/adapter_eval.yaml
+```
+
+For qualitative visualization, check the notebooks in `examples/` (e.g. `saco_*_vis_example.ipynb`) which load checkpoints and render mask overlays using `sam3/visualization_utils.py`.
+
 #### Key Configuration Sections
 
 ```yaml

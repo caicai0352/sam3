@@ -376,6 +376,7 @@ class Trainer:
             "steps": self.steps,
             "time_elapsed": self.time_elapsed_meter.val,
             "best_meter_values": self.best_meter_values,
+            "adapter_only": self.checkpoint_conf.save_adapter_only,
         }
         if self.optim_conf.amp.enabled:
             checkpoint["scaler"] = self.scaler.state_dict()
@@ -451,16 +452,21 @@ class Trainer:
 
         with g_pathmgr.open(ckpt_path, "rb") as f:
             checkpoint = torch.load(f, map_location="cpu")
+        adapter_only = checkpoint.get("adapter_only", False)
         load_state_dict_into_model(
             model=self.model,
             state_dict=checkpoint["model"],
-            ignore_missing_keys=self.checkpoint_conf.skip_saving_parameters,
+            strict=not adapter_only,
+            ignore_missing_keys=(
+                ["*"] if adapter_only else self.checkpoint_conf.skip_saving_parameters
+            ),
         )
-
-        self.optim.optimizer.load_state_dict(checkpoint["optimizer"])
-        self.loss.load_state_dict(checkpoint["loss"], strict=True)
-        self.epoch = checkpoint["epoch"]
-        self.steps = checkpoint["steps"]
+        if "optimizer" in checkpoint:
+            self.optim.optimizer.load_state_dict(checkpoint["optimizer"])
+        if "loss" in checkpoint and self.loss is not None:
+            self.loss.load_state_dict(checkpoint["loss"], strict=True)
+        self.epoch = checkpoint.get("epoch", 0)
+        self.steps = checkpoint.get("steps", self.steps)
         self.ckpt_time_elapsed = checkpoint.get("time_elapsed")
 
         if self.optim_conf.amp.enabled and "scaler" in checkpoint:
