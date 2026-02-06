@@ -609,7 +609,13 @@ def _load_adapter_checkpoint(
         )
 
 
-def _load_checkpoint(model, checkpoint_path):
+def _load_checkpoint(
+    model,
+    checkpoint_path,
+    strict_state_dict_loading: bool = True,
+    ignore_missing_keys: Optional[Sequence[str]] = None,
+    ignore_unexpected_keys: Optional[Sequence[str]] = None,
+):
     """Load model checkpoint from file."""
     with g_pathmgr.open(checkpoint_path, "rb") as f:
         ckpt = torch.load(f, map_location="cpu", weights_only=True)
@@ -626,12 +632,15 @@ def _load_checkpoint(model, checkpoint_path):
                 if "tracker" in k
             }
         )
-    missing_keys, _ = model.load_state_dict(sam3_image_ckpt, strict=False)
-    if len(missing_keys) > 0:
-        print(
-            f"loaded {checkpoint_path} and found "
-            f"missing and/or unexpected keys:\n{missing_keys=}"
-        )
+    from sam3.train.utils.checkpoint_utils import load_state_dict_into_model
+
+    load_state_dict_into_model(
+        model=model,
+        state_dict=sam3_image_ckpt,
+        strict=strict_state_dict_loading,
+        ignore_missing_keys=ignore_missing_keys,
+        ignore_unexpected_keys=ignore_unexpected_keys,
+    )
 
 
 def _setup_device_and_mode(model, device, eval_mode):
@@ -653,6 +662,9 @@ def build_sam3_image_model(
     enable_inst_interactivity=False,
     compile=False,
     adapter: Optional[Dict[str, Any]] = None,
+    strict_state_dict_loading: bool = True,
+    ignore_missing_keys: Optional[Sequence[str]] = None,
+    ignore_unexpected_keys: Optional[Sequence[str]] = None,
 ):
     """
     Build SAM3 image model
@@ -734,7 +746,13 @@ def build_sam3_image_model(
         checkpoint_path = download_ckpt_from_hf()
     # Load checkpoint if provided
     if checkpoint_path is not None:
-        _load_checkpoint(model, checkpoint_path)
+        _load_checkpoint(
+            model,
+            checkpoint_path,
+            strict_state_dict_loading=strict_state_dict_loading,
+            ignore_missing_keys=ignore_missing_keys,
+            ignore_unexpected_keys=ignore_unexpected_keys,
+        )
     adapter_checkpoint_path = adapter_cfg.get("checkpoint_path")
     if adapter_checkpoint_path:
         _load_adapter_checkpoint(

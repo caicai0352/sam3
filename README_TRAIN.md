@@ -143,6 +143,9 @@ model:
     enabled: true
     checkpoint_path: /path/to/adapter_checkpoint.pt
     param_patterns: ["*adapter*"]
+  # Optional: relax strict loading when reusing checkpoints across tasks
+  # strict_state_dict_loading: false
+  # ignore_missing_keys: ["*"]
 ```
 
 Notes:
