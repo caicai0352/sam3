@@ -621,15 +621,24 @@ def _load_checkpoint(
         ckpt = torch.load(f, map_location="cpu", weights_only=True)
     if "model" in ckpt and isinstance(ckpt["model"], dict):
         ckpt = ckpt["model"]
-    sam3_image_ckpt = {
-        k.replace("detector.", ""): v for k, v in ckpt.items() if "detector" in k
-    }
-    if model.inst_interactive_predictor is not None:
+    has_detector_prefix = any(k.startswith("detector.") for k in ckpt.keys())
+    if has_detector_prefix:
+        sam3_image_ckpt = {
+            k.replace("detector.", ""): v
+            for k, v in ckpt.items()
+            if k.startswith("detector.")
+        }
+    else:
+        sam3_image_ckpt = ckpt
+
+    if model.inst_interactive_predictor is not None and any(
+        k.startswith("tracker.") for k in ckpt.keys()
+    ):
         sam3_image_ckpt.update(
             {
                 k.replace("tracker.", "inst_interactive_predictor.model."): v
                 for k, v in ckpt.items()
-                if "tracker" in k
+                if k.startswith("tracker.")
             }
         )
     from sam3.train.utils.checkpoint_utils import load_state_dict_into_model
@@ -641,6 +650,18 @@ def _load_checkpoint(
         ignore_missing_keys=ignore_missing_keys,
         ignore_unexpected_keys=ignore_unexpected_keys,
     )
+
+
+def _merge_key_patterns(
+    base: Optional[Sequence[str]], extra: Optional[Sequence[str]]
+) -> Optional[List[str]]:
+    if not extra:
+        return list(base) if base else base
+    merged = list(base) if base else []
+    for pattern in extra:
+        if pattern not in merged:
+            merged.append(pattern)
+    return merged
 
 
 def _setup_device_and_mode(model, device, eval_mode):
@@ -746,6 +767,10 @@ def build_sam3_image_model(
         checkpoint_path = download_ckpt_from_hf()
     # Load checkpoint if provided
     if checkpoint_path is not None:
+        if adapter_cfg.get("enabled", False):
+            ignore_missing_keys = _merge_key_patterns(
+                ignore_missing_keys, adapter_cfg.get("param_patterns", ["*adapter*"])
+            )
         _load_checkpoint(
             model,
             checkpoint_path,
@@ -922,18 +947,22 @@ def build_sam3_video_model(
     if load_from_HF and checkpoint_path is None:
         checkpoint_path = download_ckpt_from_hf()
     if checkpoint_path is not None:
+        if adapter_cfg.get("enabled", False):
+            ignore_missing_keys = _merge_key_patterns(
+                None, adapter_cfg.get("param_patterns", ["*adapter*"])
+            )
         with g_pathmgr.open(checkpoint_path, "rb") as f:
             ckpt = torch.load(f, map_location="cpu", weights_only=True)
         if "model" in ckpt and isinstance(ckpt["model"], dict):
             ckpt = ckpt["model"]
+        from sam3.train.utils.checkpoint_utils import load_state_dict_into_model
 
-        missing_keys, unexpected_keys = model.load_state_dict(
-            ckpt, strict=strict_state_dict_loading
+        load_state_dict_into_model(
+            model=model,
+            state_dict=ckpt,
+            strict=strict_state_dict_loading,
+            ignore_missing_keys=ignore_missing_keys,
         )
-        if missing_keys:
-            print(f"Missing keys: {missing_keys}")
-        if unexpected_keys:
-            print(f"Unexpected keys: {unexpected_keys}")
     adapter_checkpoint_path = adapter_cfg.get("checkpoint_path")
     if adapter_checkpoint_path:
         _load_adapter_checkpoint(
