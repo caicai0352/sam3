@@ -14,7 +14,7 @@ Rope embedding code adopted from:
 
 import math
 from functools import partial
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -28,7 +28,7 @@ except ModuleNotFoundError:
     from timm.models.layers import DropPath, Mlp, trunc_normal_
 from torch import Tensor
 
-from .model_misc import LayerScale
+from .model_misc import LayerScale, SpatialAdapter
 
 
 def init_t_xy(
@@ -655,6 +655,7 @@ class ViT(nn.Module):
         bias_patch_embed: bool = True,
         compile_mode: Optional[str] = None,
         use_act_checkpoint: bool = True,
+        adapter_cfg: Optional[Dict[str, Any]] = None,
     ):
         """
         Args:
@@ -795,6 +796,16 @@ class ViT(nn.Module):
         self.ln_post = norm_layer(embed_dim) if ln_post else nn.Identity()
 
         self.apply(self._init_weights)
+        self.output_adapter = None
+        adapter_cfg = adapter_cfg or {}
+        if adapter_cfg.get("enabled", False):
+            self.output_adapter = SpatialAdapter(
+                d_model=embed_dim,
+                bottleneck_dim=adapter_cfg.get("bottleneck_dim", 64),
+                dropout=adapter_cfg.get("dropout", 0.0),
+                activation=adapter_cfg.get("activation", "relu"),
+                init_scale=adapter_cfg.get("init_scale", 1.0),
+            )
 
         if compile_mode is not None:
             self.forward = torch.compile(
@@ -855,6 +866,8 @@ class ViT(nn.Module):
                     feats = feats.reshape(
                         feats.shape[0], h, w, feats.shape[-1]
                     ).permute(0, 3, 1, 2)
+                if self.output_adapter is not None:
+                    feats = self.output_adapter(feats)
 
                 outputs.append(feats)
 

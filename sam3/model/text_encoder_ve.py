@@ -3,13 +3,13 @@
 # pyre-unsafe
 
 from collections import OrderedDict
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
-from .model_misc import LayerScale
+from .model_misc import Adapter, LayerScale
 
 
 class ResidualAttentionBlock(nn.Module):
@@ -265,6 +265,7 @@ class VETextEncoder(nn.Module):
         use_ln_post: bool = True,
         compile_mode: Optional[str] = None,
         use_act_checkpoint: bool = True,
+        adapter_cfg: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
         self.context_length = context_length
@@ -284,6 +285,16 @@ class VETextEncoder(nn.Module):
             use_act_checkpoint=use_act_checkpoint,
         )
         self.resizer = nn.Linear(self.encoder.width, d_model)
+        self.adapter = None
+        adapter_cfg = adapter_cfg or {}
+        if adapter_cfg.get("enabled", False):
+            self.adapter = Adapter(
+                d_model=d_model,
+                bottleneck_dim=adapter_cfg.get("bottleneck_dim", 64),
+                dropout=adapter_cfg.get("dropout", 0.0),
+                activation=adapter_cfg.get("activation", "relu"),
+                init_scale=adapter_cfg.get("init_scale", 1.0),
+            )
 
     def forward(
         self,
@@ -321,6 +332,8 @@ class VETextEncoder(nn.Module):
             assert input_boxes is None or len(input_boxes) == 0, (
                 "Can't replace boxes in text if it's already encoded"
             )
+        if self.adapter is not None:
+            text_memory_resized = self.adapter(text_memory_resized)
 
         # Note that the input_embeds are returned in pytorch's convention (sequence first)
         return (

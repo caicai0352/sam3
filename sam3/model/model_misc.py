@@ -227,6 +227,58 @@ def get_activation_module(activation):
     raise RuntimeError(f"activation should be relu/gelu, not {activation}.")
 
 
+class Adapter(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        bottleneck_dim: int,
+        dropout: float = 0.0,
+        activation: str = "relu",
+        init_scale: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.down = nn.Linear(d_model, bottleneck_dim)
+        self.activation = get_activation_module(activation)()
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.up = nn.Linear(bottleneck_dim, d_model)
+        self.scale = init_scale
+
+    def forward(self, x: Tensor) -> Tensor:
+        residual = x
+        x = self.down(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        x = self.up(x)
+        return residual + x * self.scale
+
+
+class SpatialAdapter(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        bottleneck_dim: int,
+        dropout: float = 0.0,
+        activation: str = "relu",
+        init_scale: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.adapter = Adapter(
+            d_model=d_model,
+            bottleneck_dim=bottleneck_dim,
+            dropout=dropout,
+            activation=activation,
+            init_scale=init_scale,
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        if x.ndim == 4:
+            b, c, h, w = x.shape
+            x = x.permute(0, 2, 3, 1).reshape(b, h * w, c)
+            x = self.adapter(x)
+            return x.reshape(b, h, w, c).permute(0, 3, 1, 2)
+        return self.adapter(x)
+
+
 def get_valid_ratio(mask):
     _, H, W = mask.shape
     valid_H = torch.sum(~mask[:, :, 0], 1)

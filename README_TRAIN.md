@@ -105,6 +105,66 @@ Training configurations are stored in `sam3/train/configs/`. The configuration f
 - **Launcher Configuration**: Distributed training and cluster settings
 - **Logging Configuration**: TensorBoard, experiment tracking, and output directories
 
+### Adapter Fine-tuning
+
+SAM3 supports lightweight adapter layers for parameter-efficient fine-tuning. Adapters can be inserted into the vision backbone, text encoder, geometry encoder, DETR encoder/decoder, and mask decoder (as well as the tracker for video models). Enable them by adding an `adapter` block under the `model` config:
+
+```yaml
+model:
+  _target_: sam3.model_builder.build_sam3_image_model
+  adapter:
+    enabled: true
+    bottleneck_dim: 64
+    dropout: 0.1
+    activation: relu
+    init_scale: 1.0
+    positions: [post_self_attn, post_cross_attn, post_ffn]
+    targets: [vision_encoder, text_encoder, geometry_encoder, detr_encoder, detr_decoder, mask_decoder]
+    train_adapter_only: true
+    param_patterns: ["*adapter*"]
+```
+
+**Checkpointing adapters only**
+
+```yaml
+trainer:
+  checkpoint:
+    save_adapter_only: true
+    adapter_parameter_patterns: ["*adapter*"]
+```
+
+**Loading adapter weights for evaluation or continued training**
+
+```yaml
+model:
+  _target_: sam3.model_builder.build_sam3_image_model
+  checkpoint_path: /path/to/base_model.pt
+  adapter:
+    enabled: true
+    checkpoint_path: /path/to/adapter_checkpoint.pt
+    param_patterns: ["*adapter*"]
+  # Optional: relax strict loading when reusing checkpoints across tasks
+  # strict_state_dict_loading: false
+  # ignore_missing_keys: ["*"]
+```
+
+Notes:
+- `positions` controls where adapters are inserted. Use any subset of `post_self_attn`, `post_cross_attn`, and `post_ffn`.
+- `targets` controls which stacks receive adapters (`vision_encoder`, `text_encoder`, `geometry_encoder`, `detr_encoder`, `detr_decoder`, `mask_decoder`, `tracker`).
+- Set `train_adapter_only: true` to freeze non-adapter parameters during fine-tuning.
+
+Example config (Roboflow fine-tuning with adapters): `sam3/train/configs/adapter/adapter_roboflow_ft.yaml`.
+
+**Adapter evaluation / inference**
+
+Use the evaluation configs to load a trained base model plus adapter weights and run metrics:
+
+```bash
+python sam3/train/train.py -c configs/adapter/adapter_eval.yaml
+```
+
+For qualitative visualization, check the notebooks in `examples/` (e.g. `saco_*_vis_example.ipynb`) which load checkpoints and render mask overlays using `sam3/visualization_utils.py`.
+
 #### Key Configuration Sections
 
 ```yaml

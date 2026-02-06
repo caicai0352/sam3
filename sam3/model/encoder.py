@@ -9,7 +9,7 @@ import torch
 from torch import nn, Tensor
 
 from .act_ckpt_utils import activation_ckpt_wrapper
-from .model_misc import get_activation_fn, get_clones, get_valid_ratio
+from .model_misc import Adapter, get_activation_fn, get_clones, get_valid_ratio
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -36,6 +36,7 @@ class TransformerEncoderLayer(nn.Module):
         pos_enc_at_cross_attn_queries: bool,
         pre_norm: bool,
         self_attention: nn.Module,
+        adapter_cfg: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize a transformer encoder layer.
@@ -80,6 +81,26 @@ class TransformerEncoderLayer(nn.Module):
         self.pos_enc_at_cross_attn_keys = pos_enc_at_cross_attn_keys
 
         self.layer_idx = None
+        self._adapter_cfg = adapter_cfg or {}
+        self._adapter_positions = set(
+            self._adapter_cfg.get("positions", ["post_ffn"])
+        )
+        self.adapter_post_self_attn = self._build_adapter("post_self_attn")
+        self.adapter_post_cross_attn = self._build_adapter("post_cross_attn")
+        self.adapter_post_ffn = self._build_adapter("post_ffn")
+
+    def _build_adapter(self, position: str) -> Optional[nn.Module]:
+        if not self._adapter_cfg.get("enabled", False):
+            return None
+        if position not in self._adapter_positions:
+            return None
+        return Adapter(
+            d_model=self.d_model,
+            bottleneck_dim=self._adapter_cfg.get("bottleneck_dim", 64),
+            dropout=self._adapter_cfg.get("dropout", 0.0),
+            activation=self._adapter_cfg.get("activation", "relu"),
+            init_scale=self._adapter_cfg.get("init_scale", 1.0),
+        )
 
     def forward_post(
         self,
@@ -120,6 +141,8 @@ class TransformerEncoderLayer(nn.Module):
         )[0]
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
+        if self.adapter_post_self_attn is not None:
+            tgt = self.adapter_post_self_attn(tgt)
 
         # Cross attention to image
         tgt2 = self.cross_attn_image(
@@ -131,11 +154,15 @@ class TransformerEncoderLayer(nn.Module):
         )[0]
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
+        if self.adapter_post_cross_attn is not None:
+            tgt = self.adapter_post_cross_attn(tgt)
 
         # FFN
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
         tgt = tgt + self.dropout3(tgt2)
         tgt = self.norm3(tgt)
+        if self.adapter_post_ffn is not None:
+            tgt = self.adapter_post_ffn(tgt)
         return tgt
 
     def forward_pre(
@@ -187,6 +214,8 @@ class TransformerEncoderLayer(nn.Module):
         if dac:
             # Recombine
             tgt = torch.cat((tgt, other_tgt), dim=0)
+        if self.adapter_post_self_attn is not None:
+            tgt = self.adapter_post_self_attn(tgt)
         tgt2 = self.norm2(tgt)
         tgt2 = self.cross_attn_image(
             query=tgt2 + query_pos if self.pos_enc_at_cross_attn_queries else tgt2,
@@ -197,9 +226,13 @@ class TransformerEncoderLayer(nn.Module):
             # attn_bias=attn_bias,
         )[0]
         tgt = tgt + self.dropout2(tgt2)
+        if self.adapter_post_cross_attn is not None:
+            tgt = self.adapter_post_cross_attn(tgt)
         tgt2 = self.norm3(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt2))))
         tgt = tgt + self.dropout3(tgt2)
+        if self.adapter_post_ffn is not None:
+            tgt = self.adapter_post_ffn(tgt)
         return tgt
 
     def forward(
