@@ -23,6 +23,12 @@ from iopath.common.file_io import g_pathmgr
 from sam3.model.data_misc import BatchedDatapoint
 from sam3.model.model_misc import SAM3Output
 from sam3.model.utils.misc import copy_data_to_device
+from sam3.adapters import (
+    freeze_except_adapters,
+    get_adapter_state_dict,
+    is_adapter_parameter,
+    load_adapter_state_dict,
+)
 from sam3.train.optim.optimizer import construct_optimizer
 from sam3.train.utils.checkpoint_utils import (
     assert_skipped_parameters_are_frozen,
@@ -74,6 +80,8 @@ class OptimConf:
     amp: Optional[Dict[str, Any]] = None
     gradient_clip: Any = None
     gradient_logger: Any = None
+    freeze_except_adapters: bool = False
+    adapter_lr_scale: float = 1.0
 
     def __post_init__(self):
         # amp
@@ -116,6 +124,8 @@ class CheckpointConf:
     initialize_after_preemption: Optional[bool] = None
     # if not None, training will be resumed from this checkpoint
     resume_from: Optional[str] = None
+    save_adapter_only: bool = False
+    load_adapter_only: bool = False
 
     def infer_missing(self):
         if self.initialize_after_preemption is None:
@@ -350,13 +360,17 @@ class Trainer:
         for ckpt_name in checkpoint_names:
             checkpoint_paths.append(os.path.join(checkpoint_folder, f"{ckpt_name}.pt"))
 
-        state_dict = unwrap_ddp_if_wrapped(self.model).state_dict()
+        if self.checkpoint_conf.save_adapter_only:
+            state_dict = get_adapter_state_dict(unwrap_ddp_if_wrapped(self.model))
+        else:
+            state_dict = unwrap_ddp_if_wrapped(self.model).state_dict()
         state_dict = exclude_params_matching_unix_pattern(
             patterns=self.checkpoint_conf.skip_saving_parameters, state_dict=state_dict
         )
 
         checkpoint = {
             "model": state_dict,
+            "adapter_only": self.checkpoint_conf.save_adapter_only,
             "optimizer": self.optim.optimizer.state_dict(),
             "epoch": epoch,
             "loss": self.loss.state_dict(),
@@ -438,11 +452,21 @@ class Trainer:
 
         with g_pathmgr.open(ckpt_path, "rb") as f:
             checkpoint = torch.load(f, map_location="cpu")
-        load_state_dict_into_model(
-            model=self.model,
-            state_dict=checkpoint["model"],
-            ignore_missing_keys=self.checkpoint_conf.skip_saving_parameters,
+        should_load_adapter_only = bool(
+            checkpoint.get("adapter_only", False) or self.checkpoint_conf.load_adapter_only
         )
+        if should_load_adapter_only:
+            load_adapter_state_dict(
+                model=self.model,
+                state_dict=checkpoint["model"],
+                strict=False,
+            )
+        else:
+            load_state_dict_into_model(
+                model=self.model,
+                state_dict=checkpoint["model"],
+                ignore_missing_keys=self.checkpoint_conf.skip_saving_parameters,
+            )
 
         self.optim.optimizer.load_state_dict(checkpoint["optimizer"])
         self.loss.load_state_dict(checkpoint["loss"], strict=True)
@@ -1069,6 +1093,13 @@ class Trainer:
         self.logger = Logger(self.logging_conf)
 
         self.model = instantiate(self.model_conf, _convert_="all")
+        if self.optim_conf.freeze_except_adapters:
+            counts = freeze_except_adapters(self.model)
+            logging.info(
+                "Adapter-only training enabled: trainable=%s frozen=%s",
+                counts["trainable"],
+                counts["frozen"],
+            )
         print_model_summary(self.model)
 
         self.loss = None
@@ -1099,11 +1130,30 @@ class Trainer:
         logging.info("Finished setting up components: Model, loss, optim, meters etc.")
 
     def _construct_optimizers(self):
+        param_groups_override = None
+        if self.optim_conf.freeze_except_adapters:
+            named_params = list(self.model.named_parameters())
+            adapter_params = [p for n, p in named_params if p.requires_grad and is_adapter_parameter(n)]
+            if adapter_params:
+                non_adapter_params = [
+                    p for n, p in named_params if p.requires_grad and not is_adapter_parameter(n)
+                ]
+                base_lr = getattr(self.optim_conf.optimizer, "lr", None)
+                if base_lr is not None and float(self.optim_conf.adapter_lr_scale) != 1.0:
+                    param_groups_override = [{"params": adapter_params, "lr": base_lr * float(self.optim_conf.adapter_lr_scale)}]
+                    if non_adapter_params:
+                        param_groups_override.append({"params": non_adapter_params, "lr": base_lr})
+                else:
+                    param_groups_override = [{"params": adapter_params}]
+                    if non_adapter_params:
+                        param_groups_override.append({"params": non_adapter_params})
+
         self.optim = construct_optimizer(
             self.model,
             self.optim_conf.optimizer,
             self.optim_conf.options,
             self.optim_conf.param_group_modifiers,
+            param_groups_override=param_groups_override,
         )
 
     def _log_loss_detailed_and_return_core_loss(self, loss, loss_str, step):

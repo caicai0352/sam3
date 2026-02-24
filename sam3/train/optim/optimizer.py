@@ -300,6 +300,7 @@ def construct_optimizer(
     param_group_modifiers_conf: List[Callable] = None,
     param_allowlist: Optional[Set[str]] = None,
     validate_param_groups=True,
+    param_groups_override: Optional[List[Dict]] = None,
 ) -> Optimizer:
     """
     Constructs a stochastic gradient descent or ADAM (or ADAMw) optimizer
@@ -330,6 +331,10 @@ def construct_optimizer(
         for name, param in model.named_parameters()
         if name in param_allowlist
     }
+
+    if param_groups_override is not None:
+        optimizer = hydra.utils.instantiate(optimizer_conf, param_groups_override)
+        return Optimizer(optimizer)
 
     if not options_conf:
         optimizer = hydra.utils.instantiate(optimizer_conf, named_parameters.values())

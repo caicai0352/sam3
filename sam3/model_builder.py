@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from iopath.common.file_io import g_pathmgr
+from sam3.adapters import inject_adapters
 from sam3.model.decoder import (
     TransformerDecoder,
     TransformerDecoderLayer,
@@ -559,6 +560,7 @@ def _setup_device_and_mode(model, device, eval_mode):
 
 def build_sam3_image_model(
     bpe_path=None,
+    adapter_cfg: Optional[dict] = None,
     device="cuda" if torch.cuda.is_available() else "cpu",
     eval_mode=True,
     checkpoint_path=None,
@@ -631,6 +633,10 @@ def build_sam3_image_model(
     )
     if load_from_HF and checkpoint_path is None:
         checkpoint_path = download_ckpt_from_hf()
+    wrapped_adapter_targets = inject_adapters(model, adapter_cfg)
+    if wrapped_adapter_targets:
+        print(f"Injected adapters into {len(wrapped_adapter_targets)} modules")
+
     # Load checkpoint if provided
     if checkpoint_path is not None:
         _load_checkpoint(model, checkpoint_path)
@@ -652,6 +658,7 @@ def download_ckpt_from_hf():
 
 def build_sam3_video_model(
     checkpoint_path: Optional[str] = None,
+    adapter_cfg: Optional[dict] = None,
     load_from_HF=True,
     bpe_path: Optional[str] = None,
     has_presence_token: bool = True,
@@ -769,6 +776,10 @@ def build_sam3_video_model(
             image_std=(0.5, 0.5, 0.5),
             compile_model=compile,
         )
+
+    wrapped_adapter_targets = inject_adapters(model, adapter_cfg)
+    if wrapped_adapter_targets:
+        print(f"Injected adapters into {len(wrapped_adapter_targets)} modules")
 
     # Load checkpoint if provided
     if load_from_HF and checkpoint_path is None:

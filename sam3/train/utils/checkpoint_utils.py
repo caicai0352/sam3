@@ -232,9 +232,7 @@ def get_state_dict(checkpoint, ckpt_state_dict_keys):
         if (isinstance(pre_train_dict, Mapping) and key not in pre_train_dict) or (
             isinstance(pre_train_dict, Sequence) and key >= len(pre_train_dict)
         ):
-            key_str = (
-                '["' + '"]["'.join(list(map(ckpt_state_dict_keys[:i], str))) + '"]'
-            )
+            key_str = '["' + '"]["'.join(map(str, ckpt_state_dict_keys[:i])) + '"]'
             raise KeyError(
                 f"'{key}' not found in checkpoint{key_str} "
                 f"with keys: {pre_train_dict.keys()}"
