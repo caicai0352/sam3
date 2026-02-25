@@ -18,6 +18,7 @@ def get_args():
     )
     p.add_argument("--output-dir", type=Path, default=Path("outputs/adapter_smoke/full"))
     p.add_argument("--steps", type=int, default=30)
+    p.add_argument("--device", type=str, default="cpu", help="cpu or cuda")
     return p.parse_args()
 
 
@@ -35,6 +36,8 @@ def main():
             str(base_dir),
             "--steps",
             str(args.steps),
+            "--device",
+            args.device,
         ]
     )
     run(
@@ -48,6 +51,8 @@ def main():
             "--save-adapter-only",
             "--steps",
             str(args.steps),
+            "--device",
+            args.device,
         ]
     )
     run(
@@ -58,6 +63,8 @@ def main():
             str(base_dir / "base_or_full.pt"),
             "--output",
             str(base_dir / "metrics.json"),
+            "--device",
+            args.device,
         ]
     )
     run(
@@ -71,6 +78,8 @@ def main():
             "--use-adapter",
             "--output",
             str(ad_dir / "metrics.json"),
+            "--device",
+            args.device,
         ]
     )
     run(
@@ -85,6 +94,8 @@ def main():
             str(ad_dir / "adapter_only.pt"),
             "--output-image",
             str(out / "compare_base_vs_adapter.png"),
+            "--device",
+            args.device,
         ]
     )
 

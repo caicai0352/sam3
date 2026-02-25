@@ -95,3 +95,48 @@ python -m unittest tests/test_adapter_smoke.py
 - 对比可视化：`outputs/.../compare_base_vs_adapter.png`
 
 以上产物用于本地/CI 的快速可复现验证（默认 CPU）。
+
+
+## 4）在 NVIDIA A800 上训练与推理
+
+### 4.1 环境检查
+```bash
+nvidia-smi
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no-gpu')"
+```
+
+### 4.2 Adapter smoke（A800，单卡）
+```bash
+python scripts/adapter_smoke_test.py \
+  --output-dir outputs/adapter_smoke/a800 \
+  --steps 40 \
+  --device cuda
+```
+
+### 4.3 SAM3 训练（真实训练入口，单机单卡示例）
+> 下面命令使用项目原生训练入口 `sam3/train/train.py`：
+```bash
+python sam3/train/train.py \
+  -c configs/odinw13/odinw_text_only_train.yaml \
+  --use-cluster 0 \
+  --num-gpus 1
+```
+
+### 4.4 SAM3 评估/推理（真实入口示例）
+```bash
+python sam3/train/train.py \
+  -c configs/roboflow_v100/roboflow_v100_eval.yaml \
+  --use-cluster 0 \
+  --num-gpus 1
+```
+
+### 4.5 Adapter 组合加载评估（A800）
+```bash
+python scripts/adapters/eval_adapter_smoke.py \
+  --base-ckpt outputs/adapter_smoke/a800/adapter/base_or_full.pt \
+  --adapter-ckpt outputs/adapter_smoke/a800/adapter/adapter_only.pt \
+  --use-adapter \
+  --device cuda \
+  --output outputs/adapter_smoke/a800/adapter/metrics.json
+```
+
