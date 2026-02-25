@@ -95,12 +95,35 @@ python scripts/adapters/visualize_adapter_compare.py --base-ckpt outputs/adapter
 python scripts/adapter_smoke_test.py --output-dir outputs/adapter_smoke/a800 --steps 40 --device cuda
 ```
 
+
+### B.8 使用“组件模板”直接跑训练（已整合到配置文件）
+已在 `sam3/train/configs/odinw13/odinw_text_only_train.yaml` 内置：
+- `scratch.adapter_presets.text_backbone`
+- `scratch.adapter_presets.det_head`
+- `scratch.adapter_presets.seg_head`
+- `scratch.adapter_presets.vit_block`
+- `scratch.adapter_presets.all_components`
+
+直接切换组件模板（示例：只开 ViT block adapter）
+```bash
+python sam3/train/train.py -c configs/odinw13/odinw_text_only_train.yaml --use-cluster 0 --num-gpus 1
+```
+然后把配置里的 `scratch.adapter_profile` 改为 `vit_block`（或其它模板）即可运行。
+
+也可用配置文件编辑器/自动化脚本在运行前改为：
+- `text_backbone`
+- `det_head`
+- `seg_head`
+- `vit_block`
+- `all_components`
+
 ---
 
 ## C. 配置说明
 
 ### C.1 adapter 配置字段（`inject_adapters(model, adapter_cfg)`）
 支持字段（含别名）：
+（这些字段已经在 `sam3/train/configs/odinw13/odinw_text_only_train.yaml` 的 `scratch.adapter_presets.*` 中给了可运行模板）
 - `enabled`: 是否启用
 - `target_patterns` / `targets`: 模块名匹配（支持通配符）
 - `target_types` / `module_types`: 模块类型名匹配（如 `Linear`）
