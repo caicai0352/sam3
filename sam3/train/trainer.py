@@ -82,6 +82,8 @@ class OptimConf:
     gradient_logger: Any = None
     freeze_except_adapters: bool = False
     adapter_lr_scale: float = 1.0
+    train_ln: bool = False
+    train_bias: bool = False
 
     def __post_init__(self):
         # amp
@@ -1094,7 +1096,11 @@ class Trainer:
 
         self.model = instantiate(self.model_conf, _convert_="all")
         if self.optim_conf.freeze_except_adapters:
-            counts = freeze_except_adapters(self.model)
+            counts = freeze_except_adapters(
+                self.model,
+                train_ln=self.optim_conf.train_ln,
+                train_bias=self.optim_conf.train_bias,
+            )
             logging.info(
                 "Adapter-only training enabled: trainable=%s frozen=%s",
                 counts["trainable"],

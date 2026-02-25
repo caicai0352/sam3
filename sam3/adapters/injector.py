@@ -48,30 +48,60 @@ def _infer_dim(module: nn.Module) -> int:
     if isinstance(module, nn.Linear):
         return int(module.out_features)
     if isinstance(module, (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d)):
-        return int(module.num_features if hasattr(module, "num_features") else module.normalized_shape[-1])
+        return int(
+            module.num_features
+            if hasattr(module, "num_features")
+            else module.normalized_shape[-1]
+        )
     raise ValueError(f"Cannot infer adapter dim for module type: {type(module).__name__}")
+
+
+def _normalize_adapter_cfg(cfg: Dict) -> Dict:
+    cfg = dict(cfg)
+    if "targets" in cfg and "target_patterns" not in cfg:
+        cfg["target_patterns"] = cfg["targets"]
+    if "module_types" in cfg and "target_types" not in cfg:
+        cfg["target_types"] = cfg["module_types"]
+    if "d_adapter" in cfg and "bottleneck_dim" not in cfg:
+        cfg["bottleneck_dim"] = cfg["d_adapter"]
+    if "init" in cfg and "init_scale" not in cfg:
+        cfg["init_scale"] = cfg["init"]
+
+    placement = cfg.get("placement", "post")
+    if cfg.get("houlsby", False):
+        placement = "post"
+    if placement not in ("post", "output"):
+        raise ValueError(
+            f"Unsupported placement '{placement}'. Supported: ['post', 'output']"
+        )
+    cfg["placement"] = placement
+    return cfg
 
 
 def inject_adapters(model: nn.Module, cfg: Optional[Dict] = None) -> List[str]:
     """Inject adapters by wrapping matched child modules.
 
-    cfg supports:
+    Supported cfg keys:
       - enabled: bool
-      - target_patterns: List[str]
-      - target_types: List[str]
-      - bottleneck_dim: int
+      - target_patterns / targets: List[str]
+      - target_types / module_types: List[str]
+      - bottleneck_dim / d_adapter: int
       - activation: str
       - dropout: float
       - layernorm_before: bool
-      - init_scale: float
+      - init_scale / init: float
       - channel_dim: int
+      - placement: str (currently supports post/output)
+      - houlsby: bool (alias to post placement)
     """
-    cfg = cfg or {}
+    cfg = _normalize_adapter_cfg(cfg or {})
     if not cfg.get("enabled", False):
         return []
 
     target_patterns = cfg.get("target_patterns", ["*"])
-    target_types = cfg.get("target_types", ["Linear", "MultiheadAttention", "Attention", "Block"])
+    target_types = cfg.get(
+        "target_types", ["Linear", "MultiheadAttention", "Attention", "Block"]
+    )
 
     wrapped = []
     for parent, child_name, full_name, child in list(_iter_parent_modules(model)):
@@ -104,15 +134,36 @@ def inject_adapters(model: nn.Module, cfg: Optional[Dict] = None) -> List[str]:
     return wrapped
 
 
+def list_injected_adapters(model: nn.Module) -> List[str]:
+    return [name for name, m in model.named_modules() if isinstance(m, AdapterWrapper)]
+
+
 def is_adapter_parameter(name: str) -> bool:
-    return ".adapter." in name or name.endswith(".scale") and ".adapter" in name
+    return ".adapter." in name or (name.endswith(".scale") and ".adapter" in name)
 
 
-def freeze_except_adapters(model: nn.Module) -> Dict[str, int]:
+def _is_ln_parameter(name: str) -> bool:
+    lowered = name.lower()
+    return (
+        ".norm" in lowered
+        or ".ln" in lowered
+        or "ln_" in lowered
+        or lowered.endswith("layernorm.weight")
+        or lowered.endswith("layernorm.bias")
+    )
+
+
+def freeze_except_adapters(
+    model: nn.Module, train_ln: bool = False, train_bias: bool = False
+) -> Dict[str, int]:
     trainable = 0
     frozen = 0
     for n, p in model.named_parameters():
         keep = is_adapter_parameter(n)
+        if train_ln and _is_ln_parameter(n):
+            keep = True
+        if train_bias and n.endswith(".bias"):
+            keep = True
         p.requires_grad_(keep)
         if keep:
             trainable += p.numel()
@@ -125,7 +176,9 @@ def get_adapter_state_dict(model: nn.Module) -> Dict[str, torch.Tensor]:
     return {k: v for k, v in model.state_dict().items() if ".adapter." in k}
 
 
-def load_adapter_state_dict(model: nn.Module, state_dict: Dict[str, torch.Tensor], strict: bool = False):
+def load_adapter_state_dict(
+    model: nn.Module, state_dict: Dict[str, torch.Tensor], strict: bool = False
+):
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     adapter_missing = [k for k in missing if ".adapter." in k]
     adapter_unexpected = [k for k in unexpected if ".adapter." in k]

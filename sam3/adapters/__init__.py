@@ -4,6 +4,7 @@ from .injector import (
     get_adapter_state_dict,
     inject_adapters,
     is_adapter_parameter,
+    list_injected_adapters,
     load_adapter_state_dict,
 )
 
@@ -14,6 +15,7 @@ __all__ = [
     "inject_adapters",
     "freeze_except_adapters",
     "is_adapter_parameter",
+    "list_injected_adapters",
     "get_adapter_state_dict",
     "load_adapter_state_dict",
 ]
