@@ -111,6 +111,88 @@ odinw_train:
 # ============================================================================
 scratch:
   enable_segmentation: False
+
+  # --------------------------------------------------------------------------
+  # Adapter presets: select one profile name via `scratch.adapter_profile`
+  # and model.adapter_cfg will pick the corresponding preset.
+  # --------------------------------------------------------------------------
+  adapter_profile: none
+  adapter_presets:
+    none:
+      enabled: false
+
+    text_backbone:
+      enabled: true
+      targets:
+        - 'backbone.language_backbone.encoder.transformer.resblocks.*.attn'
+        - 'backbone.language_backbone.encoder.transformer.resblocks.*.mlp'
+      module_types: ['Linear', 'MultiheadAttention']
+      d_adapter: 64
+      dropout: 0.0
+      init: 1.0e-3
+      placement: post
+      houlsby: false
+
+    det_head:
+      enabled: true
+      targets:
+        - 'transformer.decoder.layers.*.self_attn'
+        - 'transformer.decoder.layers.*.cross_attn'
+        - 'transformer.decoder.layers.*.linear1'
+        - 'transformer.decoder.layers.*.linear2'
+      module_types: ['Linear', 'MultiheadAttention', 'Attention', 'RoPEAttention']
+      d_adapter: 64
+      dropout: 0.0
+      init: 1.0e-3
+      placement: post
+      houlsby: false
+
+    seg_head:
+      enabled: true
+      targets:
+        - 'segmentation_head.pixel_decoder.conv_layers.*'
+        - 'segmentation_head.mask_predictor.mask_embed.layers.*'
+        - 'segmentation_head.instance_seg_head'
+        - 'segmentation_head.semantic_seg_head'
+      module_types: ['Linear', 'Conv2d']
+      d_adapter: 32
+      dropout: 0.0
+      init: 1.0e-3
+      placement: post
+      houlsby: false
+
+    vit_block:
+      enabled: true
+      targets:
+        - 'backbone.vision_backbone.trunk.blocks.*.attn'
+        - 'backbone.vision_backbone.trunk.blocks.*.mlp'
+      module_types: ['Attention', 'Mlp', 'Linear']
+      d_adapter: 64
+      dropout: 0.0
+      init: 1.0e-3
+      placement: post
+      houlsby: false
+
+    # union profile: turn on all major components
+    all_components:
+      enabled: true
+      targets:
+        - 'backbone.language_backbone.encoder.transformer.resblocks.*.attn'
+        - 'backbone.language_backbone.encoder.transformer.resblocks.*.mlp'
+        - 'transformer.decoder.layers.*.self_attn'
+        - 'transformer.decoder.layers.*.cross_attn'
+        - 'transformer.decoder.layers.*.linear1'
+        - 'transformer.decoder.layers.*.linear2'
+        - 'segmentation_head.pixel_decoder.conv_layers.*'
+        - 'segmentation_head.mask_predictor.mask_embed.layers.*'
+        - 'backbone.vision_backbone.trunk.blocks.*.attn'
+        - 'backbone.vision_backbone.trunk.blocks.*.mlp'
+      module_types: ['Linear', 'MultiheadAttention', 'Attention', 'RoPEAttention', 'Mlp', 'Conv2d']
+      d_adapter: 64
+      dropout: 0.0
+      init: 1.0e-3
+      placement: post
+      houlsby: false
   use_act_checkpoint_geo_encoder: True
   input_geometry_encoder:
     _target_: sam3.model.geometry_encoders.SequenceGeometryEncoder
@@ -352,6 +434,7 @@ trainer:
     device: cpus
     eval_mode: false # Set to false if training
     enable_segmentation: ${scratch.enable_segmentation} # Warning: Enable this if using segmentation.
+    adapter_cfg: ${scratch.adapter_presets.${scratch.adapter_profile}}
 
   meters:
     val:
