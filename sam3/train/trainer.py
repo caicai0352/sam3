@@ -434,7 +434,7 @@ class Trainer:
             self.model = model_weight_initializer(model=self.model)
 
     def _load_resuming_checkpoint(self, ckpt_path: str):
-        logging.info(f"Resuming training from {ckpt_path}")
+        logging.info(f"Loading checkpoint from {ckpt_path}")
 
         with g_pathmgr.open(ckpt_path, "rb") as f:
             checkpoint = torch.load(f, map_location="cpu")
@@ -444,13 +444,15 @@ class Trainer:
             ignore_missing_keys=self.checkpoint_conf.skip_saving_parameters,
         )
 
-        self.optim.optimizer.load_state_dict(checkpoint["optimizer"])
-        self.loss.load_state_dict(checkpoint["loss"], strict=True)
-        self.epoch = checkpoint["epoch"]
-        self.steps = checkpoint["steps"]
+        if self.optim is not None and "optimizer" in checkpoint:
+            self.optim.optimizer.load_state_dict(checkpoint["optimizer"])
+        if self.loss is not None and "loss" in checkpoint:
+            self.loss.load_state_dict(checkpoint["loss"], strict=True)
+        self.epoch = checkpoint.get("epoch", 0)
+        self.steps = checkpoint.get("steps", 0)
         self.ckpt_time_elapsed = checkpoint.get("time_elapsed")
 
-        if self.optim_conf.amp.enabled and "scaler" in checkpoint:
+        if self.optim is not None and self.optim_conf.amp.enabled and "scaler" in checkpoint:
             self.scaler.load_state_dict(checkpoint["scaler"])
 
         self.best_meter_values = checkpoint.get("best_meter_values", {})

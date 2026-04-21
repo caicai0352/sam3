@@ -1,0 +1,32 @@
+# @package _global_
+defaults:
+  - /configs/odinw13/odinw_text_only.yaml
+  - _self_
+
+# Convenience eval config for local/loop testing.
+# Usage example:
+#   python sam3/train/train.py -c configs/odinw13/test_cui.yaml --use-cluster 0 --num-gpus 1 --num-nodes 1
+# Then loop by overriding this field in generated copies:
+#   submitit.job_array.task_index: 0..12
+
+paths:
+  odinw_data_root: <YOUR_DATA_DIR>
+  experiment_log_dir: <YOUR_EVAL_LOG_DIR>
+  bpe_path: <BPE_PATH> # e.g. sam3/assets/bpe_simple_vocab_16e6.txt.gz
+
+# The joint text-only training config disables segmentation head.
+# Keep this aligned for checkpoint loading during eval.
+scratch:
+  enable_segmentation: False
+
+submitit:
+  use_cluster: False
+  job_array:
+    num_tasks: 13
+    task_index: 0
+
+trainer:
+  checkpoint:
+    # Required for evaluating your joint-trained model checkpoint.
+    # Example: /path/to/odinw13_result_joint/checkpoints/checkpoint_4.pt
+    resume_from: <YOUR_CHECKPOINT_PATH>
