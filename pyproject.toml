@@ -53,6 +53,7 @@ dev = [
 ]
 notebooks = [
     "matplotlib",
+    "gradio",
     "jupyter",
     "notebook",
     "ipywidgets",

@@ -161,6 +161,8 @@ various types of prompts:
   : Demonstrates how to run batched inference with SAM 3 on images.
 - [`sam3_agent.ipynb`](examples/sam3_agent.ipynb): Demonsterates the use of SAM
   3 Agent to segment complex text prompt on images.
+- [`gradio_sam3_image_demo.py`](examples/gradio_sam3_image_demo.py)
+  : Launches a Gradio web UI to compare baseline single-model SAM 3 against a dual-model MoE-style routing setup on the same uploaded image, with per-mode visualization and inference latency.
 - [`saco_gold_silver_vis_example.ipynb`](examples/saco_gold_silver_vis_example.ipynb)
   : Shows a few examples from SA-Co image evaluation set.
 - [`saco_veval_vis_example.ipynb`](examples/saco_veval_vis_example.ipynb) :
